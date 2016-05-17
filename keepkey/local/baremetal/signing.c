@@ -25,7 +25,9 @@
 #include <crypto.h>
 #include <layout.h>
 #include <confirm_sm.h>
+#include <stdio.h>
 
+#include "sha2.h"
 #include "signing.h"
 #include "fsm.h"
 #include "transaction.h"
@@ -41,12 +43,12 @@ static const CoinType *coin;
 static const HDNode *root;
 static HDNode node;
 static bool signing = false;
-static uint32_t idx1, idx2;
+static uint32_t idx1, idx2, idx2_skip;
 static TxRequest resp;
 static TxInputType input;
 static TxOutputBinType bin_output;
-static TxStruct to, tp, ti;
-static SHA256_CTX tc;
+static TxStruct to, tp, ti, ti2;
+static SHA256_CTX tc, tc2;
 static uint8_t hash[32], hash_check[32], privkey[32], pubkey[33], sig[64];
 static uint64_t to_spend, spending, change_spend;
 static bool multisig_fp_set, multisig_fp_mismatch;
@@ -180,6 +182,8 @@ void send_req_2_prev_meta(void)
 	resp.has_details = true;
 	resp.details.has_tx_hash = true;
 	resp.details.tx_hash.size = input.prev_hash.size;
+  	resp.details.has_request_index = true;
+  	resp.details.request_index = input.prev_index;
 	memcpy(resp.details.tx_hash.bytes, input.prev_hash.bytes, input.prev_hash.size);
 	msg_write(MessageType_MessageType_TxRequest, &resp);
 }
@@ -346,6 +350,19 @@ void signing_txack(TransactionType *tx)
 		case STAGE_REQUEST_2_PREV_META:
 			tx_init(&tp, tx->inputs_cnt, tx->outputs_cnt, tx->version, tx->lock_time, false);
 			idx2 = 0;
+
+			if(tx->has_bookmark) {
+				memcpy(&tp.ctx, &tx->bookmark.sha256_ctx.bytes, sizeof(SHA256_CTX));
+				tp.have_inputs = tx->inputs_cnt;
+				tp.have_outputs = tx->outputs_cnt - tx->bookmark.remaining_output_cnt;
+				tp.size = tp.ctx.bitcount / 8;
+
+				idx2 = tx->outputs_cnt - tx->bookmark.remaining_output_cnt;
+
+				send_req_2_prev_output();
+				return;
+			}
+
 			send_req_2_prev_input();
 			return;
 		case STAGE_REQUEST_2_PREV_INPUT:
@@ -497,23 +514,37 @@ void signing_txack(TransactionType *tx)
 			    animating_progress_handler();
 			    idx1 = 0;
 			    idx2 = 0;
+			    idx2_skip = 0;
 			    send_req_4_input();
 			}
 			return;
 		}
 		case STAGE_REQUEST_4_INPUT:
-			if (idx2 == 0) {
-				tx_init(&ti, inputs_count, outputs_count, version, lock_time, true);
-				sha256_Init(&tc);
-				sha256_Update(&tc, (const uint8_t *)&inputs_count, sizeof(inputs_count));
-				sha256_Update(&tc, (const uint8_t *)&outputs_count, sizeof(outputs_count));
-				sha256_Update(&tc, (const uint8_t *)&version, sizeof(version));
-				sha256_Update(&tc, (const uint8_t *)&lock_time, sizeof(lock_time));
+			if (idx2_skip == 0) {
+				tx_init(&ti2, inputs_count, outputs_count, version, lock_time, true);
+				sha256_Init(&tc2);
+				sha256_Update(&tc2, (const uint8_t *)&inputs_count, sizeof(inputs_count));
+				sha256_Update(&tc2, (const uint8_t *)&outputs_count, sizeof(outputs_count));
+				sha256_Update(&tc2, (const uint8_t *)&version, sizeof(version));
+				sha256_Update(&tc2, (const uint8_t *)&lock_time, sizeof(lock_time));
+			}
+			if (idx2 == idx2_skip) {
+				memcpy(&ti, &ti2, sizeof(TxStruct));
+				memcpy(&tc, &tc2, sizeof(SHA256_CTX));
 				memset(privkey, 0, 32);
 				memset(pubkey, 0, 33);
 			}
 			sha256_Update(&tc, (const uint8_t *)tx->inputs, sizeof(TxInputType));
+			tx->inputs[0].script_sig.size = 0;
 			if (idx2 == idx1) {
+				if (!tx_serialize_input_hash(&ti2, tx->inputs)) {
+					fsm_sendFailure(FailureType_Failure_Other, "Failed to serialize input");
+					signing_abort();
+					return;
+				} else {
+					memcpy(&tc2, &tc, sizeof(SHA256_CTX));
+					idx2_skip = idx2 + 1;
+				}
 				memcpy(&input, tx->inputs, sizeof(TxInputType));
 				memcpy(&node, root, sizeof(HDNode));
 				if (hdnode_private_ckd_cached(&node, tx->inputs[0].address_n, tx->inputs[0].address_n_count) == 0) {
@@ -539,8 +570,6 @@ void signing_txack(TransactionType *tx)
 				}
 				memcpy(privkey, node.private_key, 32);
 				memcpy(pubkey, node.public_key, 33);
-			} else {
-				tx->inputs[0].script_sig.size = 0;
 			}
 			if (!tx_serialize_input_hash(&ti, tx->inputs)) {
 				fsm_sendFailure(FailureType_Failure_Other, "Failed to serialize input");
@@ -620,7 +649,7 @@ void signing_txack(TransactionType *tx)
 				update_ctr = 0;
 				if (idx1 < inputs_count - 1) {
 					idx1++;
-					idx2 = 0;
+					idx2 = idx2_skip;
 					send_req_4_input();
 				} else {
 					idx1 = 0;
