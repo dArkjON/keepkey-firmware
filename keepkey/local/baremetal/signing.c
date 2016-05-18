@@ -354,10 +354,7 @@ void signing_txack(TransactionType *tx)
 			if(tx->has_bookmark) {
 				memcpy(&tp.ctx, &tx->bookmark.sha256_ctx.bytes, sizeof(SHA256_CTX));
 				tp.have_inputs = tx->inputs_cnt;
-				tp.have_outputs = tx->outputs_cnt - tx->bookmark.remaining_output_cnt;
 				tp.size = tp.ctx.bitcount / 8;
-
-				idx2 = tx->outputs_cnt - tx->bookmark.remaining_output_cnt;
 
 				send_req_2_prev_output();
 				return;
