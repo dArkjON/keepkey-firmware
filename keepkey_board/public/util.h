@@ -37,5 +37,6 @@ void data2hex(const void *data, uint32_t len, char *str);
 uint32_t readprotobufint(uint8_t **ptr);
 void rev_byte_order(uint8_t *bfr, size_t len);
 void dec64_to_str(uint64_t dec64_val, char *str);
+int compareStrings(const char *str1, const char *str2);
 
 #endif

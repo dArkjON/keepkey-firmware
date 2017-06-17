@@ -103,3 +103,18 @@ void dec64_to_str(uint64_t dec64_val, char *str)
     sbfr++;
 }
 
+/*
+ * Compare 2 strings in constant time
+ */
+int compareStrings(const char *str1, const char *str2) {
+	volatile unsigned char d = 0U;
+	size_t i = 0;
+
+	while (str1[i]) {
+		d |= str2[i] ^ str1[i];
+		i++;
+	}
+	d |= str2[i];
+
+	return d == 0;
+}

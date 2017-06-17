@@ -605,7 +605,7 @@ const char *storage_get_language(void)
  */
 bool storage_is_pin_correct(const char *pin)
 {
-    return strcmp(shadow_config.storage.pin, pin) == 0;
+    return compareStrings(shadow_config.storage.pin, pin) == 0;
 }
 
 /*
